@@ -1,6 +1,7 @@
 import urllib.request
 import pandas as pd
 from pathlib import Path
+import torch
 
 def get_truthful_qa_pairs(num_samples=100):
     """
