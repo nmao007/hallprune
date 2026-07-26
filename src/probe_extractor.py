@@ -1,20 +1,19 @@
 import torch
 import json
 import urllib.request
+from datasets import load_dataset
 
 def get_truthful_qa_pairs(num_samples=100):
-    url = f"https://datasets-server.huggingface.co/rows?dataset=EleutherAI%2Ftruthful_qa_mc&config=default&split=validation&offset=0&length={num_samples}"
-    
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    response = urllib.request.urlopen(req)
-    data = json.loads(response.read().decode('utf-8'))
-    
+    """
+    Loads EleutherAI/truthful_qa_mc using Hugging Face datasets library.
+    """
+    dataset = load_dataset("EleutherAI/truthful_qa_mc", split="validation")
     pairs = []
-    for item in data['rows']:
-        row = item['row']
-        question = row['question']
-        choices = row['choices']
-        labels = row['labels']
+    
+    for item in dataset:
+        question = item['question']
+        choices = item['choices']
+        labels = item['labels']
         
         truth_text = None
         hallu_text = None
@@ -24,11 +23,17 @@ def get_truthful_qa_pairs(num_samples=100):
                 truth_text = choice
             elif label == 0 and hallu_text is None:
                 hallu_text = choice
+                
             if truth_text and hallu_text:
                 break
                 
         if truth_text and hallu_text:
-            pairs.append((f"Q: {question}\nA: {truth_text}", f"Q: {question}\nA: {hallu_text}"))
+            prompt_truth = f"Q: {question}\nA: {truth_text}"
+            prompt_hallu = f"Q: {question}\nA: {hallu_text}"
+            pairs.append((prompt_truth, prompt_hallu))
+            
+        if len(pairs) >= num_samples:
+            break
             
     return pairs
 
