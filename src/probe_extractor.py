@@ -2,15 +2,31 @@ import torch
 import json
 import urllib.request
 from datasets import load_dataset
+import mlcroissant as mlc
 
 def get_truthful_qa_pairs(num_samples=100):
     """
-    Loads EleutherAI/truthful_qa_mc using Hugging Face datasets library.
+    Downloads EleutherAI/truthful_qa_mc using the mlcroissant library.
+    Reads strictly from Hugging Face's auto-generated Croissant API endpoint.
     """
-    dataset = load_dataset("EleutherAI/truthful_qa_mc", split="validation")
-    pairs = []
+    # HF's automated Croissant metadata endpoint for the dataset
+    croissant_url = "https://huggingface.co/api/datasets/EleutherAI/truthful_qa_mc/croissant"
     
-    for item in dataset:
+    print("Loading dataset via mlcroissant...")
+    dataset = mlc.Dataset(croissant_url)
+    
+    # HF Croissant record sets are typically named "<config>_<split>"
+    # We want the default config, validation split.
+    try:
+        records = dataset.records("default_validation")
+    except ValueError:
+        # Fallback dynamic lookup just in case the Croissant API naming changes
+        record_sets = [rs.name for rs in dataset.metadata.record_sets]
+        target_rs = next(rs for rs in record_sets if "validation" in rs.lower())
+        records = dataset.records(target_rs)
+
+    pairs = []
+    for item in records:
         question = item['question']
         choices = item['choices']
         labels = item['labels']
@@ -23,14 +39,11 @@ def get_truthful_qa_pairs(num_samples=100):
                 truth_text = choice
             elif label == 0 and hallu_text is None:
                 hallu_text = choice
-                
             if truth_text and hallu_text:
                 break
                 
         if truth_text and hallu_text:
-            prompt_truth = f"Q: {question}\nA: {truth_text}"
-            prompt_hallu = f"Q: {question}\nA: {hallu_text}"
-            pairs.append((prompt_truth, prompt_hallu))
+            pairs.append((f"Q: {question}\nA: {truth_text}", f"Q: {question}\nA: {hallu_text}"))
             
         if len(pairs) >= num_samples:
             break

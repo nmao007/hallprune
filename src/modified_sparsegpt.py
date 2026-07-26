@@ -1,7 +1,18 @@
 import sys
 import torch
-sys.path.append("./sparsegpt")
-from sparsegpt import SparseGPT
+from pathlib import Path
+
+# Add the 'sparsegpt' subfolder directly to sys.path
+parent_dir = Path(__file__).resolve().parent.parent
+sparsegpt_path = parent_dir / "sparsegpt"
+sys.path.append(str(sparsegpt_path))
+
+# Import the class from the inner file: sparsegpt/sparsegpt.py
+try:
+    from sparsegpt import SparseGPT
+except ImportError:
+    # Backup in case the class is in a file named model/data/etc inside sparsegpt/
+    from sparsegpt.sparsegpt import SparseGPT
 
 class Hall_SparseGPT(SparseGPT):
     def add_iti_penalty(self, theta_direction, alpha=50.0):
