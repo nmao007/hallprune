@@ -1,45 +1,41 @@
-import torch
-import json
 import urllib.request
-from datasets import load_dataset
-import mlcroissant as mlc
+import pandas as pd
+from pathlib import Path
 
 def get_truthful_qa_pairs(num_samples=100):
     """
-    Downloads EleutherAI/truthful_qa_mc using the mlcroissant library.
-    Reads strictly from Hugging Face's auto-generated Croissant API endpoint.
+    Reads EleutherAI/truthful_qa_mc from the local data/ directory.
+    Automatically downloads it if missing (e.g., on a fresh remote clone).
     """
-    # HF's automated Croissant metadata endpoint for the dataset
-    croissant_url = "https://huggingface.co/api/datasets/EleutherAI/truthful_qa_mc/croissant"
+    # Dynamically resolve paths relative to src/probe_extractor.py
+    root_dir = Path(__file__).resolve().parent.parent
+    data_dir = root_dir / "data"
+    local_file = data_dir / "truthfulqa.parquet"
     
-    print("Loading dataset via mlcroissant...")
-    dataset = mlc.Dataset(croissant_url)
+    # Auto-download fallback for remote servers
+    if not local_file.exists():
+        print(f"Data not found locally. Downloading to {local_file}...")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        url = "https://huggingface.co/datasets/EleutherAI/truthful_qa_mc/resolve/refs%2Fconvert%2Fparquet/default/validation/0000.parquet"
+        urllib.request.urlretrieve(url, local_file)
+        
+    # Read the local parquet file
+    df = pd.read_parquet(local_file)
     
-    # HF Croissant record sets are typically named "<config>_<split>"
-    # We want the default config, validation split.
-    try:
-        records = dataset.records("default_validation")
-    except ValueError:
-        # Fallback dynamic lookup just in case the Croissant API naming changes
-        record_sets = [rs.name for rs in dataset.metadata.record_sets]
-        target_rs = next(rs for rs in record_sets if "validation" in rs.lower())
-        records = dataset.records(target_rs)
-
     pairs = []
-    for item in records:
-        question = item['question']
-        choices = item['choices']
-        labels = item['labels']
+    for _, row in df.iterrows():
+        question = row['question']
+        choices = row['choices']
+        label_idx = row['label']
         
-        truth_text = None
+        # 1. Truthful text is the choice at the label index
+        truth_text = choices[label_idx]
+        
+        # 2. Hallucinated text is just the first incorrect choice
         hallu_text = None
-        
-        for choice, label in zip(choices, labels):
-            if label == 1 and truth_text is None:
-                truth_text = choice
-            elif label == 0 and hallu_text is None:
+        for i, choice in enumerate(choices):
+            if i != label_idx:
                 hallu_text = choice
-            if truth_text and hallu_text:
                 break
                 
         if truth_text and hallu_text:
