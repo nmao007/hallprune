@@ -7,7 +7,7 @@ class Hall_SparseGPT(SparseGPT):
     def __init__(self, layer):
             super().__init__(layer)
 
-    def add_iti_penalty(self, theta_direction, alpha=50.0):
+    def add_truthfulness_penalty(self, theta_direction, alpha=50.0):
             if theta_direction is None:
                 return
 
