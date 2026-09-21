@@ -1,7 +1,7 @@
 import sys
 import torch
 from pathlib import Path
-from sparsegpt import SparseGPT
+from .sparsegpt import SparseGPT
 
 class Hall_SparseGPT(SparseGPT):
     def __init__(self, layer):

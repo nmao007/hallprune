@@ -4,16 +4,25 @@ from pathlib import Path
 import torch
 
 def get_truthful_qa_pairs(num_samples=100):
-    root_dir = Path(__file__).resolve().parent.parent
-    data_dir = root_dir / "data"
-    local_file = data_dir / "truthfulqa.parquet"
+    # __file__ is src/lib/probe_extractor.py
+    # .parent (1) is lib/
+    # .parent (2) is src/
+    # .parent (3) is hallprune/ (the root)
+    root_dir = Path(__file__).resolve().parent.parent.parent
+    
+    # This now points to /content/hallprune/data/truthfulqa.parquet
+    local_file = root_dir / "data" / "truthfulqa.parquet"
     
     if not local_file.exists():
-        print(f"Data not found locally. Downloading to {local_file}...")
-        data_dir.mkdir(parents=True, exist_ok=True)
-        url = "https://huggingface.co/datasets/EleutherAI/truthful_qa_mc/resolve/refs%2Fconvert%2Fparquet/default/validation/0000.parquet"
-        urllib.request.urlretrieve(url, local_file)
+        # Fallback if running directly from the root
+        local_file = Path("data/truthfulqa.parquet")
         
+    if not local_file.exists():
+        raise FileNotFoundError(f"Could not find local dataset at: {local_file.resolve()}")
+
+    print(f"Loading local dataset from {local_file.resolve()}...")
+    
+    # Read the parquet file into a pandas DataFrame
     df = pd.read_parquet(local_file)
     
     pairs = []
@@ -22,7 +31,10 @@ def get_truthful_qa_pairs(num_samples=100):
         choices = row['choices']
         label_idx = row['label']
         
+        # The correct answer is at the label index
         truth_text = choices[label_idx]
+        
+        # Grab the first incorrect answer to act as the hallucinated baseline
         hallu_text = None
         for i, choice in enumerate(choices):
             if i != label_idx:

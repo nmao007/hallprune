@@ -3,3 +3,4 @@ transformers
 datasets 
 accelerate 
 scikit-learn
+python-dotenv

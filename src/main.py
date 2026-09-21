@@ -55,7 +55,7 @@ def main():
     model_name = args.model.split("/")[-1]
     print(f"loading llm model {args.model}")
     model = get_llm(args.model, args.cache_dir)
-    model.eval()
+    model.eval(); model.seqlen = 2048
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
 
     device = torch.device("cuda:0")
@@ -85,8 +85,9 @@ def main():
     ppl_test = eval_ppl(args, model, tokenizer, device)
     print(f"wikitext perplexity {ppl_test}")
 
-    if not os.path.exists(args.save):
-        os.makedirs(args.save)
+    if args.save is not None:
+        if not os.path.exists(args.save):
+            os.makedirs(args.save)
     save_filepath = os.path.join(args.save, f"log_{args.prune_method}.txt")
     with open(save_filepath, "w") as f:
         print("method\tactual_sparsity\tppl_test", file=f, flush=True)
