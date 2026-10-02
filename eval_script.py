@@ -21,12 +21,15 @@ os.environ["HF_TOKEN"] = HF_TOKEN
 
 # Models to evaluate
 MODELS = [
-    "nmao7/hallprune-llama-3.1-8b"
+    "nmao7/hallprune-llama-3.1-8b",
+    "nmao7/magnitude_pruned-llama-3.1-8b",
+    "nmao7/wanda_pruned-llama-3.1-8b",
+    "nmao7/sparsegpt_pruned-llama-3.1-8b"
 ]
 
 for model_id in MODELS:
     model_name = model_id.split("/")[-1]
-    base_output_dir = f"./evaluation_results/{model_name}"
+    base_output_dir = f"./eval_results/{model_name}"
     
     os.makedirs(base_output_dir, exist_ok=True)
 
