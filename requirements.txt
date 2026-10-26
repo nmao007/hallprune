@@ -4,4 +4,4 @@ datasets
 accelerate 
 scikit-learn
 python-dotenv
-lm-eval
+lm-eval==0.4.13

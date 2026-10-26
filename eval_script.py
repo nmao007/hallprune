@@ -32,7 +32,7 @@ MODELS = [
 
 for model_id in MODELS:
     model_name = model_id.split("/")[-1]
-    base_output_dir = f"./eval_results/{model_name}"
+    base_output_dir = f"./results/{model_name}"
     
     os.makedirs(base_output_dir, exist_ok=True)
 

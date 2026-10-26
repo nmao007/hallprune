@@ -3,8 +3,7 @@
 ## 2026-10-25: audit fixes
 
 These changes respond to an external review of the HallPrune method (see `hallprune_method.pdf`).
-Old artifacts: `pruning.ipynb` is obsolete, and everything under `evaluation_results/` is stale.
-In particular, `evaluation_results/hallprune-llama-3.1-8b/` is known to be wrong. Don't compare against those numbers.
+Old artifacts: `pruning.ipynb` is obsolete. All pre-audit eval results now live in `results/legacy/` (see the 2026-10-26 entry). Don't compare against those numbers.
 Every model must be re-pruned and re-evaluated with the code below.
 
 ### What the audit confirmed (before these fixes)
@@ -69,3 +68,15 @@ Every model must be re-pruned and re-evaluated with the code below.
 4. Evaluate everything with the same `eval_script.py` (same lm_eval version and few-shot settings), reporting held-out TruthfulQA.
 5. Consider an out-of-distribution truthfulness eval (e.g. HaluEval, or a TruthfulQA generation task), given issue 8.
 6. Consider averaging the probe over the answer tokens instead of using only the last token. The last token is "." in every probe pair.
+
+## 2026-10-26: results reorganized
+
+- Tagged `74ff45e` as `pre-audit` (local tag, not pushed).
+- Moved every pre-audit eval result into `results/legacy/`, grouped by run date. `results/legacy/README.md` explains why each run is invalid and keeps the numbers for reference.
+  - `eval_results/hallprune-llama-3.1-8b` (Oct 2) → `results/legacy/2026-10-02_hallprune-v0/`
+  - `evaluation_results/evaluation_results 2/hallprune-llama-3.1-8b` (Aug 18) → `results/legacy/2026-08-18_hallprune-v0/`
+  - `evaluation_results/{magnitude,wanda,sparsegpt}_pruned-llama-3.1-8b` (Jul 29) → `results/legacy/2026-07-29_baselines/`
+  - Deleted `evaluation_results/hallprune-llama-3.1-8b` (Jul 29): wrong even for the v0 method. It's still in git history.
+- `eval_script.py` now writes to `results/<model_name>/`.
+- Pinned `lm-eval==0.4.13` in `requirements.txt` (the old runs mixed 0.4.12 and 0.4.13).
+- To do, by hand on Hugging Face: rename `nmao7/hallprune-llama-3.1-8b` to `-legacy` (keep it private), and replace the magnitude, Wanda and SparseGPT repos once they've been re-pruned with the current code.
