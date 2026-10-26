@@ -19,6 +19,9 @@ if not HF_TOKEN:
 
 os.environ["HF_TOKEN"] = HF_TOKEN
 
+# Custom lm_eval tasks (held-out TruthfulQA)
+TASKS_DIR = os.path.abspath("tasks")
+
 # Models to evaluate
 MODELS = [
     "nmao7/hallprune-llama-3.1-8b",
@@ -81,7 +84,8 @@ for model_id in MODELS:
             "--tasks", tasks,
             "--device", "cuda:0",
             "--batch_size", "auto",
-            "--output_path", output_path
+            "--output_path", output_path,
+            "--include_path", TASKS_DIR
         ]
         if num_fewshot is not None:
             cmd.extend(["--num_fewshot", str(num_fewshot)])
@@ -89,8 +93,9 @@ for model_id in MODELS:
         print(f"\n▶️ Running {tasks} ({f'{num_fewshot}-shot' if num_fewshot else '0-shot'})...")
         subprocess.run(cmd, check=True)
 
-    # 1. TruthfulQA (0-shot)
-    run_eval("truthfulqa_mc2", num_fewshot=None, output_subdir="hallucination_results")
+    # 1. TruthfulQA (0-shot). The *_heldout tasks drop the probe questions in data/probe_split.json;
+    #    report those for HallPrune. Full truthfulqa_mc2 is kept for comparison with older runs.
+    run_eval("truthfulqa_mc2,truthfulqa_mc2_heldout,truthfulqa_mc1_heldout", num_fewshot=None, output_subdir="hallucination_results")
 
     # 2. MMLU (5-shot)
     run_eval("mmlu", num_fewshot=5, output_subdir="mmlu_results")

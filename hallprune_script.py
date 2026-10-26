@@ -22,17 +22,26 @@ except Exception as e:
 
 # Configuration
 MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-OUTPUT_DIR = "./hallprune/src/out/llama-3.1-8b-hallprune"
-REPO_ID = f"{user_info['name']}/hallprune-llama-3.1-8b"
+PERCDAMP = "0.01"            # must match the SparseGPT baseline
+HALL_ALPHA = "1.0"           # relative to mean(diag(H)); sweep over orders of magnitude
+HALL_ALPHA_SCALE = "mean_diag"
+HALL_DIRECTION = "probe"     # "random" for the random-direction control
+RUN_NAME = f"hallprune-{HALL_DIRECTION}-a{HALL_ALPHA}-{HALL_ALPHA_SCALE}-llama-3.1-8b"
+OUTPUT_DIR = f"./hallprune/src/out/{RUN_NAME}"
+REPO_ID = f"{user_info['name']}/{RUN_NAME}"
 
 # Step 1: Execute Pruning Script
-print("\n✂️ Starting Pruning Process...")
+print("\n Starting Pruning Process...")
 prune_command = [
     "python", "./hallprune/src/main.py",
     "--model", MODEL_ID,
     "--prune_method", "hallprune",
     "--sparsity_ratio", "0.5",
     "--sparsity_type", "unstructured",
+    "--percdamp", PERCDAMP,
+    "--hall_alpha", HALL_ALPHA,
+    "--hall_alpha_scale", HALL_ALPHA_SCALE,
+    "--hall_direction", HALL_DIRECTION,
     "--save", OUTPUT_DIR,
     "--save_model", OUTPUT_DIR
 ]

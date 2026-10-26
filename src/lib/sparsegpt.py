@@ -38,7 +38,7 @@ class SparseGPT:
         self.H += inp.matmul(inp.t())
 
     def fasterprune(
-        self, sparsity, prune_n=0, prune_m=0, blocksize=128, percdamp=.01
+        self, sparsity, prune_n=0, prune_m=0, blocksize=128, percdamp=.01, damp_base=None
     ):
         W = self.layer.weight.data.clone()
         if isinstance(self.layer, nn.Conv2d):
@@ -57,7 +57,8 @@ class SparseGPT:
 
         Losses = torch.zeros(self.rows, device=self.dev)
 
-        damp = percdamp * torch.mean(torch.diag(H))
+        # damp_base lets callers that modify H (e.g. HallPrune's penalty) damp relative to the original Hessian
+        damp = percdamp * (damp_base if damp_base is not None else torch.mean(torch.diag(H)))
         diag = torch.arange(self.columns, device=self.dev)
         H[diag, diag] += damp
         H = torch.linalg.cholesky(H)

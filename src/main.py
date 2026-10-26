@@ -39,6 +39,15 @@ def main():
     parser.add_argument('--save', type=str, default=None, help='Path to save results.')
     parser.add_argument('--save_model', type=str, default=None, help='Path to save the pruned model.')
 
+    parser.add_argument('--percdamp', type=float, default=0.01, help='SparseGPT/HallPrune damping, as a fraction of mean(diag(H)) before any penalty.')
+    parser.add_argument('--hall_alpha', type=float, default=1.0, help='HallPrune penalty strength.')
+    parser.add_argument('--hall_alpha_scale', type=str, default="mean_diag", choices=["mean_diag", "trace"],
+                        help='What hall_alpha is relative to. "trace" with alpha=50 reproduces the original runs.')
+    parser.add_argument('--hall_direction', type=str, default="probe", choices=["probe", "random"],
+                        help='"random" replaces every probe with a random unit vector (control).')
+    parser.add_argument('--hall_direction_seed', type=int, default=0, help='Seed for --hall_direction random.')
+    parser.add_argument('--probe_nsamples', type=int, default=100, help='Number of TruthfulQA pairs used to extract probes (from data/probe_split.json).')
+
     parser.add_argument("--eval_zero_shot", action="store_true")
     args = parser.parse_args()
 

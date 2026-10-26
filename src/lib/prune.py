@@ -7,7 +7,7 @@ from .layerwrapper import WrappedGPT
 from .data import get_loaders 
 from .ablate import AblateGPT
 from .modified_sparsegpt import Hall_SparseGPT
-from .probe_extractor import ProbeExtractor, get_truthful_qa_pairs
+from .probe_extractor import ProbeExtractor, get_truthful_qa_pairs, random_probes
 
 def find_layers(module, layers=[nn.Linear], name=''):
     """
@@ -254,6 +254,7 @@ def prune_sparsegpt(args, model, tokenizer, dev, prune_n=0, prune_m=0):
     outs = torch.zeros_like(inps)
     attention_mask = cache['attention_mask']
     position_ids = cache['position_ids']
+    position_embeddings = cache['position_embeddings']
 
     print('Ready.')
 
@@ -288,7 +289,7 @@ def prune_sparsegpt(args, model, tokenizer, dev, prune_n=0, prune_m=0):
             print(i, name)
             print('Pruning ...')
 
-            gpts[name].fasterprune(args.sparsity_ratio, prune_n=prune_n, prune_m=prune_m, percdamp=0.01, blocksize=128)
+            gpts[name].fasterprune(args.sparsity_ratio, prune_n=prune_n, prune_m=prune_m, percdamp=args.percdamp, blocksize=128)
             gpts[name].free()
 
         for j in range(args.nsamples):
@@ -307,14 +308,19 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
     ## SparseGPT code available at: https://github.com/IST-DASLab/sparsegpt/tree/f5c25005a61f96a0933ca2f95705a963585aafaa
     print('Starting ...')
 
-    print('Extracting truthful and hallucinated pairs')
-    prompt_pairs = get_truthful_qa_pairs(num_samples=100)
-    truthful_prompts = [p[0] for p in prompt_pairs]
-    hallucinated_prompts = [p[1] for p in prompt_pairs] 
+    if args.hall_direction == "random":
+        # Control: same penalty strength along a random unit direction
+        print(f'Using random probe directions (seed {args.hall_direction_seed})')
+        all_probes = random_probes(model, seed=args.hall_direction_seed)
+    else:
+        print('Extracting truthful and hallucinated pairs')
+        prompt_pairs = get_truthful_qa_pairs(num_samples=args.probe_nsamples)
+        truthful_prompts = [p[0] for p in prompt_pairs]
+        hallucinated_prompts = [p[1] for p in prompt_pairs]
 
-    print('Extracting Truthfulness Probes...')
-    extractor = ProbeExtractor(model, tokenizer, device=dev)
-    all_probes = extractor.extract_all_layers_probes(truthful_prompts, hallucinated_prompts)
+        print('Extracting Truthfulness Probes...')
+        extractor = ProbeExtractor(model, tokenizer, device=dev)
+        all_probes = extractor.extract_all_layers_probes(truthful_prompts, hallucinated_prompts)
 
     dataloader, _ = get_loaders("c4",nsamples=args.nsamples,seed=args.seed,seqlen=model.seqlen,tokenizer=tokenizer)
 
@@ -388,16 +394,16 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         for name in gpts:
             print(i, name)
             
-            # map the linear layer names to probe keys
+            # map the linear layer names to probe keys (each probe is taken from that layer's input)
             probe_key = None
             if 'q_proj' in name or 'k_proj' in name or 'v_proj' in name:
-                probe_key = 'attn_in'
+                probe_key = 'qkv_in'
             elif 'o_proj' in name:
-                probe_key = 'post_attn'
+                probe_key = 'o_in'
             elif 'gate_proj' in name or 'up_proj' in name:
-                probe_key = 'mlp_in'
+                probe_key = 'gate_up_in'
             elif 'down_proj' in name:
-                probe_key = 'bottleneck'
+                probe_key = 'down_in'
 
             # fetch the specific probe for this layer and key
             probe_vector = all_probes[i].get(probe_key)
@@ -405,12 +411,12 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
             # inject penalty into hessian
             if probe_vector is not None:
                 print(f'Adding penalty using {probe_key} probe...')
-                gpts[name].add_truthfulness_penalty(probe_vector, alpha=50.0) 
+                gpts[name].add_truthfulness_penalty(probe_vector, alpha=args.hall_alpha, scale_mode=args.hall_alpha_scale)
             else:
                 print(f'Warning: No probe found for {name}, pruning standardly.')
 
             print('Pruning ...')
-            gpts[name].fasterprune(args.sparsity_ratio, prune_n=prune_n, prune_m=prune_m, percdamp=0.05, blocksize=128)
+            gpts[name].fasterprune(args.sparsity_ratio, prune_n=prune_n, prune_m=prune_m, percdamp=args.percdamp, blocksize=128)
             gpts[name].free()
 
         for j in range(args.nsamples):
@@ -466,6 +472,7 @@ def prune_ablate(args, model, tokenizer, dev, prune_n=0, prune_m=0):
     outs = torch.zeros_like(inps)
     attention_mask = cache['attention_mask']
     position_ids = cache['position_ids']
+    position_embeddings = cache['position_embeddings']
 
     print('Ready.')
 
