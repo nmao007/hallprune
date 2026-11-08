@@ -43,9 +43,20 @@ def main():
     parser.add_argument('--hall_alpha', type=float, default=1.0, help='HallPrune penalty strength.')
     parser.add_argument('--hall_alpha_scale', type=str, default="mean_diag", choices=["mean_diag", "trace"],
                         help='What hall_alpha is relative to. "trace" with alpha=50 reproduces the original runs.')
-    parser.add_argument('--hall_direction', type=str, default="probe", choices=["probe", "random"],
-                        help='"random" replaces every probe with a random unit vector (control).')
+    parser.add_argument('--hall_direction', type=str, default="probe", choices=["probe", "random", "contrast", "contrast_random"],
+                        help='"probe": rank-1 TruthfulQA probe. "random": random unit vector (control). '
+                             '"contrast": rank-k contrastive truth subspace from CounterFact quads. '
+                             '"contrast_random": random subspace with the same rank and spectrum (control).')
     parser.add_argument('--hall_direction_seed', type=int, default=0, help='Seed for --hall_direction random.')
+    parser.add_argument('--contrast_file', type=str, default=None,
+                        help='Quads built by scripts/build_truth_data.py (default: data/truth/counterfact_quads.jsonl).')
+    parser.add_argument('--contrast_nquads', type=int, default=1024, help='Number of known quads used for the truth subspace.')
+    parser.add_argument('--contrast_rank', type=int, default=64, help='Top-k eigenvectors kept (0 = all positive ones).')
+    parser.add_argument('--contrast_control_weight', type=float, default=1.0,
+                        help='beta in E[tt^T] - beta*E[oo^T]; 0 disables the object-identity control.')
+    parser.add_argument('--contrast_quads_per_batch', type=int, default=16, help='Quads per forward batch (4 statements each).')
+    parser.add_argument('--contrast_no_filter', action='store_true',
+                        help='Skip the dense-model filter that keeps only facts the model gets right.')
     parser.add_argument('--probe_nsamples', type=int, default=100, help='Number of TruthfulQA pairs used to extract probes (from data/probe_split.json).')
 
     parser.add_argument("--eval_zero_shot", action="store_true")

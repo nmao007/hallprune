@@ -44,6 +44,36 @@ class Hall_SparseGPT(SparseGPT):
             # 4. Force strict symmetry
             self.H = (self.H + self.H.T) / 2.0
 
+    def add_subspace_penalty(self, P, alpha=1.0, scale_mode="mean_diag"):
+            """
+            Adds alpha * s * P to the Hessian, penalizing tr(dW P dW^T), for a PSD P with unit trace
+            (the contrastive truth subspace from lib.truth_data). Rank-1 P = v v^T is the probe penalty.
+            P is PSD, so H + alpha * s * P stays positive definite once damping is added.
+
+            Also returns tr(P H) / mean(diag(H)): how strongly the plain Hessian already weights the
+            penalized subspace (1 = an average direction; >> 1 means the penalty adds little that H
+            doesn't already protect).
+            """
+            if P is None:
+                return None
+            self.H = self.H.float()
+            P = P.to(self.dev).float()
+
+            mean_diag = torch.mean(torch.diag(self.H))
+            self.damp_base = mean_diag
+            coverage = (torch.sum(P * self.H) / mean_diag).item() if mean_diag > 0 else float("nan")
+            if scale_mode == "mean_diag":
+                ref = mean_diag
+            elif scale_mode == "trace":
+                ref = torch.trace(self.H)
+            else:
+                raise ValueError(f"Unknown scale_mode {scale_mode}")
+            scale = alpha * ref if ref > 0 else alpha
+
+            self.H += scale * P
+            self.H = (self.H + self.H.T) / 2.0
+            return coverage
+
     def fasterprune(self, sparsity, prune_n=0, prune_m=0, blocksize=128, percdamp=.01):
             # Damp relative to the pre-penalty Hessian, otherwise the penalty itself
             # inflates mean(diag(H)) and the damping by a factor of (1 + alpha * ref / tr(H)).

@@ -8,6 +8,44 @@ from .data import get_loaders
 from .ablate import AblateGPT
 from .modified_sparsegpt import Hall_SparseGPT
 from .probe_extractor import ProbeExtractor, get_truthful_qa_pairs, random_probes
+from .truth_data import load_quads, select_known_quads, tokenize_quads, ContrastAccumulator
+
+# Probe / contrast key for each pruned linear: the space of that linear's input
+# (k/v share q's input, up shares gate's input)
+LINEAR_KEY = {'q_proj': 'qkv_in', 'k_proj': 'qkv_in', 'v_proj': 'qkv_in', 'o_proj': 'o_in',
+              'gate_proj': 'gate_up_in', 'up_proj': 'gate_up_in', 'down_proj': 'down_in'}
+KEY_SOURCE = {'q_proj': 'qkv_in', 'o_proj': 'o_in', 'gate_proj': 'gate_up_in', 'down_proj': 'down_in'}
+
+
+def _layer_out(o):
+    return o[0] if isinstance(o, (tuple, list)) else o
+
+
+def _catch_layer0_inputs(model, layers, batches, dev):
+    """Inputs to decoder layer 0 (and that layer's kwargs) for each batch of input_ids."""
+    caught, kwargs_list = [], []
+
+    class BatchCatcher(nn.Module):
+        def __init__(self, module):
+            super().__init__()
+            self.module = module
+        def forward(self, inp, **kwargs):
+            caught.append(inp.detach())
+            kwargs_list.append({
+                'attention_mask': kwargs.get('attention_mask'),
+                'position_ids': kwargs.get('position_ids'),
+                'position_embeddings': kwargs.get('position_embeddings'),
+            })
+            raise ValueError
+
+    layers[0] = BatchCatcher(layers[0])
+    for ids, _ in batches:
+        try:
+            model(ids.to(dev))
+        except ValueError:
+            pass
+    layers[0] = layers[0].module
+    return caught, kwargs_list
 
 def find_layers(module, layers=[nn.Linear], name=''):
     """
@@ -308,10 +346,25 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
     ## SparseGPT code available at: https://github.com/IST-DASLab/sparsegpt/tree/f5c25005a61f96a0933ca2f95705a963585aafaa
     print('Starting ...')
 
+    contrast_mode = args.hall_direction in ("contrast", "contrast_random")
+    all_probes = None
+    contrast_batches = []
+    diagnostics = []
     if args.hall_direction == "random":
         # Control: same penalty strength along a random unit direction
         print(f'Using random probe directions (seed {args.hall_direction_seed})')
         all_probes = random_probes(model, seed=args.hall_direction_seed)
+    elif contrast_mode:
+        # Contrastive truth subspace from CounterFact 2x2 quads (see lib/truth_data.py)
+        quads = load_quads(args.contrast_file)
+        quads, stats = select_known_quads(model, tokenizer, quads, args.contrast_nquads, dev,
+                                          filter_known=not args.contrast_no_filter)
+        contrast_batches, n_used = tokenize_quads(tokenizer, quads, args.contrast_quads_per_batch)
+        print(f'Contrast quads: scored {stats["scored"]}, kept {stats["kept"]} known, using {n_used} '
+              f'({len(contrast_batches)} batches); rank {args.contrast_rank}, control weight {args.contrast_control_weight}'
+              + (f', RANDOM subspace (seed {args.hall_direction_seed})' if args.hall_direction == "contrast_random" else ''))
+        if n_used == 0:
+            raise ValueError("No contrast quads left after filtering")
     else:
         print('Extracting truthful and hallucinated pairs')
         prompt_pairs = get_truthful_qa_pairs(num_samples=args.probe_nsamples)
@@ -362,6 +415,12 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
     position_ids = cache['position_ids']
     position_embeddings = cache['position_embeddings']
 
+    # Contrast statements travel through the same partially-pruned prefix as the calibration data,
+    # so the truth subspace at layer i is measured in the model whose layer i is being pruned.
+    if contrast_mode:
+        cinps, ckwargs = _catch_layer0_inputs(model, layers, contrast_batches, dev)
+        torch.cuda.empty_cache()
+
     print('Ready.')
 
     for i in range(len(layers)):
@@ -376,6 +435,42 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         gpts = {}
         for name in subset:
             gpts[name] = Hall_SparseGPT(subset[name])
+
+        penalties = {}
+        if contrast_mode:
+            accs, cur, chandles = {}, {}, []
+
+            def acc_hook(key):
+                def tmp(_, inp, out):
+                    x = inp[0]
+                    last = cur['last'].to(x.device)
+                    accs[key].add(x[torch.arange(x.shape[0], device=x.device), last])
+                return tmp
+
+            for name in subset:
+                src = name.split('.')[-1]
+                if src in KEY_SOURCE:
+                    key = KEY_SOURCE[src]
+                    accs[key] = ContrastAccumulator(subset[name].in_features, subset[name].weight.device)
+                    chandles.append(subset[name].register_forward_hook(acc_hook(key)))
+            for b, (_, last) in enumerate(contrast_batches):
+                cur['last'] = last
+                layer(cinps[b], **ckwargs[b])
+            for h in chandles:
+                h.remove()
+
+            for k_idx, (key, acc) in enumerate(sorted(accs.items())):
+                seed = None
+                if args.hall_direction == "contrast_random":
+                    seed = args.hall_direction_seed * 1_000_003 + i * 10 + k_idx
+                P, info = acc.penalty(rank=args.contrast_rank, control_weight=args.contrast_control_weight, random_seed=seed)
+                acc.free()
+                penalties[key] = P
+                info.update(layer=i, key=key)
+                diagnostics.append(info)
+                print(f'layer {i} {key}: ' + ', '.join(f'{k}={v:.4g}' if isinstance(v, float) else f'{k}={v}' for k, v in info.items() if k not in ('layer', 'key')))
+            del accs
+            torch.cuda.empty_cache()
 
         def add_batch(name):
             def tmp(_, inp, out):
@@ -405,6 +500,19 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
             elif 'down_proj' in name:
                 probe_key = 'down_in'
 
+            if contrast_mode:
+                P = penalties.get(probe_key)
+                if P is not None:
+                    coverage = gpts[name].add_subspace_penalty(P, alpha=args.hall_alpha, scale_mode=args.hall_alpha_scale)
+                    print(f'Adding {probe_key} contrast-subspace penalty (tr(PH)/mean diag H = {coverage:.3g})')
+                    diagnostics.append({'layer': i, 'linear': name, 'coverage': coverage})
+                else:
+                    print(f'Warning: no contrast signal for {name}, pruning standardly.')
+                print('Pruning ...')
+                gpts[name].fasterprune(args.sparsity_ratio, prune_n=prune_n, prune_m=prune_m, percdamp=args.percdamp, blocksize=128)
+                gpts[name].free()
+                continue
+
             # fetch the specific probe for this layer and key
             probe_vector = all_probes[i].get(probe_key)
 
@@ -422,10 +530,20 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         for j in range(args.nsamples):
             outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids, position_embeddings=position_embeddings)[0]
 
+        if contrast_mode:
+            # propagate the contrast statements through the now-pruned layer
+            cinps = [_layer_out(layer(cinps[b], **ckwargs[b])) for b in range(len(cinps))]
+
         layers[i] = layer 
         torch.cuda.empty_cache()
 
         inps, outs = outs, inps
+
+    if contrast_mode and args.save:
+        import json, os
+        os.makedirs(args.save, exist_ok=True)
+        with open(os.path.join(args.save, 'contrast_diagnostics.json'), 'w') as f:
+            json.dump(diagnostics, f, indent=1)
 
     model.config.use_cache = use_cache
     torch.cuda.empty_cache()
