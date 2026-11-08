@@ -439,12 +439,17 @@ def prune_hall(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         penalties = {}
         if contrast_mode:
             accs, cur, chandles = {}, {}, []
+            tail = getattr(args, 'contrast_tail', 1)
 
             def acc_hook(key):
                 def tmp(_, inp, out):
                     x = inp[0]
                     last = cur['last'].to(x.device)
-                    accs[key].add(x[torch.arange(x.shape[0], device=x.device), last])
+                    rows = torch.arange(x.shape[0], device=x.device)
+                    # offset m counts back from the last token; m > 0 reaches the object tokens
+                    # (never the BOS token at position 0)
+                    for m in range(tail):
+                        accs[key].add(x[rows, (last - m).clamp(min=1)])
                 return tmp
 
             for name in subset:

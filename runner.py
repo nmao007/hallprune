@@ -5,6 +5,9 @@
     modal run runner.py::main --hall-alpha 10 --hall-direction random
     modal run runner.py::main --hall-alpha 10 --hall-direction contrast --contrast-rank 64
     modal run runner.py::main --hall-alpha 10 --hall-direction contrast_random --contrast-rank 64   # matched control
+    # oracle upper bound: subspace measured on the held-out eval statements (leaky on purpose)
+    modal run runner.py::main --hall-alpha 100 --hall-direction contrast --contrast-file data/truth/oracle_quads.jsonl \
+        --contrast-no-filter --contrast-nquads 1554 --contrast-tail 4 --no-upload
     modal run runner.py::main --prune-method sparsegpt    # baseline
     modal run --detach runner.py::main ...                # keep running if you close the terminal
 
@@ -57,6 +60,9 @@ def prune(
     contrast_rank: int = 64,
     contrast_nquads: int = 1024,
     contrast_control_weight: float = 1.0,
+    contrast_file: str = "",
+    contrast_tail: int = 1,
+    contrast_no_filter: bool = False,
     upload: bool = True,
 ):
     from huggingface_hub import HfApi
@@ -65,6 +71,9 @@ def prune(
         run_name = f"hallprune-{hall_direction}-a{hall_alpha}-{hall_alpha_scale}-llama-3.1-8b"
         if hall_direction in ("contrast", "contrast_random"):
             tag = f"k{contrast_rank}-n{contrast_nquads}" + ("" if contrast_control_weight == 1.0 else f"-b{contrast_control_weight}")
+            tag += "" if contrast_tail == 1 else f"-t{contrast_tail}"
+            if "oracle" in contrast_file:
+                tag = "oracle-" + tag
             run_name = run_name.replace(f"-{hall_direction}-", f"-{hall_direction}-{tag}-")
         if hall_direction in ("random", "contrast_random"):
             run_name = run_name.replace("-llama", f"-s{hall_direction_seed}-llama")
@@ -88,9 +97,14 @@ def prune(
         "--contrast_rank", str(contrast_rank),
         "--contrast_nquads", str(contrast_nquads),
         "--contrast_control_weight", str(contrast_control_weight),
+        "--contrast_tail", str(contrast_tail),
         "--save", out_dir,
         "--save_model", out_dir,
     ]
+    if contrast_file:
+        cmd += ["--contrast_file", contrast_file]
+    if contrast_no_filter:
+        cmd.append("--contrast_no_filter")
     print(" ".join(cmd))
     subprocess.run(cmd, cwd=REPO, check=True)
     hf_cache.commit()
@@ -220,6 +234,9 @@ def main(
     contrast_rank: int = 64,
     contrast_nquads: int = 1024,
     contrast_control_weight: float = 1.0,
+    contrast_file: str = "",
+    contrast_tail: int = 1,
+    contrast_no_filter: bool = False,
     percdamp: float = 0.01,
     upload: bool = True,
 ):
@@ -233,6 +250,9 @@ def main(
         contrast_rank=contrast_rank,
         contrast_nquads=contrast_nquads,
         contrast_control_weight=contrast_control_weight,
+        contrast_file=contrast_file,
+        contrast_tail=contrast_tail,
+        contrast_no_filter=contrast_no_filter,
         upload=upload,
     ))
 

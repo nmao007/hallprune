@@ -57,6 +57,9 @@ def main():
     parser.add_argument('--contrast_quads_per_batch', type=int, default=16, help='Quads per forward batch (4 statements each).')
     parser.add_argument('--contrast_no_filter', action='store_true',
                         help='Skip the dense-model filter that keeps only facts the model gets right.')
+    parser.add_argument('--contrast_tail', type=int, default=1,
+                        help='Measure contrasts at the last N token positions (1 = last token only; >1 also '
+                             'covers the object tokens, where attention reads the fact).')
     parser.add_argument('--probe_nsamples', type=int, default=100, help='Number of TruthfulQA pairs used to extract probes (from data/probe_split.json).')
 
     parser.add_argument("--eval_zero_shot", action="store_true")
