@@ -22,3 +22,18 @@ The original 2026-07-29 HallPrune run was deleted: it wasn't a valid record even
 | Magnitude | 07-29 | 0.472 | 0.338 | 0.300 | 0.355 | 0.557 | — |
 
 For context, uniform guessing scores 0.448 on TruthfulQA mc2 and 0.226 on mc1.
+
+## 2026-11: rank-1 probe, post-audit (`2026-11_rank1-probe/`)
+
+These runs use the post-audit code (`74ff45e` onward): probes in the right space, `mean_diag` α scaling, damping fixed, held-out TruthfulQA. They're valid for what they measured, but they were archived when the project moved from a rank-1 TruthfulQA probe to a contrastive truth subspace built from external true/false data, with generation-level hallucination evals (see LOG.md, 2026-11-07). Re-evaluate the baselines with the new eval suite rather than reusing these numbers.
+
+| Model | mc2 (all) | mc2_heldout | mc1_heldout | WikiText-2 PPL |
+|---|---|---|---|---|
+| SparseGPT (pd 0.01) | 0.457 | 0.458 | 0.283 | — |
+| Wanda | 0.462 | 0.463 | 0.299 | — |
+| HallPrune probe α=1 | 0.457 | 0.457 | 0.292 | 10.42 |
+| HallPrune probe α=10 | 0.466 | 0.468 | 0.299 | 10.41 |
+| HallPrune probe α=100 | 0.468 | 0.467 | 0.301 | 10.45 |
+| HallPrune random α=10 (seed 0) | 0.459 | 0.460 | 0.289 | 10.40 |
+
+Probe vs. random at α=10 is +0.007 mc2_heldout on a single seed, which is within noise (unpaired stderr is about ±0.015 on 717 questions). The gain saturates between α=10 and α=100, consistent with a single direction already being close to fully protected.
