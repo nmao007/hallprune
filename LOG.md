@@ -80,3 +80,49 @@ Every model must be re-pruned and re-evaluated with the code below.
 - `eval_script.py` now writes to `results/<model_name>/`.
 - Pinned `lm-eval==0.4.13` in `requirements.txt` (the old runs mixed 0.4.12 and 0.4.13).
 - To do, by hand on Hugging Face: rename `nmao7/hallprune-llama-3.1-8b` to `-legacy` (keep it private), and replace the magnitude, Wanda and SparseGPT repos once they've been re-pruned with the current code.
+
+## 2026-11-07: contrastive truth subspace (rank-k) from external data
+
+### Why
+- The rank-1 TruthfulQA probe gave +0.007 mc2_heldout over the random-direction control on one seed. That's within noise.
+- The gain saturates between α=10 and α=100. At α=10, ‖δW·v‖ is already about 5× smaller, so pushing harder on one direction can't help, and adding more directions is the only lever left.
+- The closest prior work, TPLO (EMNLP 2025 Findings), only re-allocates layer-wise sparsity in Wanda, using true/false separability. It changes no weights and adds no subspace constraint, so a truth constraint inside SparseGPT's solver is still open.
+- TruthfulQA mc2 doesn't track quality well (see audit issue 8). The goal is now a lower *hallucination rate* than SparseGPT and Wanda, at some cost in perplexity.
+
+### Archived
+- All post-audit runs (SparseGPT, Wanda, probe α=1/10/100, random α=10) moved to `results/legacy/2026-11_rank1-probe/`. The numbers are in `results/legacy/README.md`.
+
+### Data (`data/truth/`, `scripts/build_truth_data.py`; see `data/truth/README.md`)
+- **Construction:** 15,486 CounterFact 2×2 quads (true/false object × affirmative/"It is not true that ..."). Subjects that appear in the eval sets are removed.
+- **Held-out eval:** the Bürger et al. True/False sets (6 topics + negations, TPLO's probe-accuracy protocol), plus larger_than and smaller_than.
+
+### Method (`src/lib/truth_data.py`, `Hall_SparseGPT.add_subspace_penalty`, `prune_hall`)
+- **Contrasts:** at the last token of each statement, `t = d_aff + d_neg` (truth) and `o = d_aff − d_neg` (object identity).
+- **Penalty:** P = top-k eigenvectors of the positive part of `E[ttᵀ] − β·E[ooᵀ]`, normalized to unit trace. H += α·mean_diag(H)·P.
+  - P is PSD, so H stays positive definite and Cholesky is unaffected.
+  - With k = 1 this is the rank-1 penalty, and α means the same thing as before.
+- **Sequential measurement:** contrast statements go through the same partially pruned prefix as the C4 calibration data, so P for layer i is measured in the model actually being pruned. The rank-1 probe was extracted once, from the dense model.
+- **Knowledge filter:** only quads the dense model gets right are used.
+- **Matched control:** `contrast_random` keeps the same eigenvalues but uses a random orthonormal basis.
+- **Diagnostics:** written to `<save>/contrast_diagnostics.json`:
+  - `pos_mass`: share of the spectrum where the truth contrast beats the control
+  - `control_ratio`: tr E[ooᵀ] / tr E[ttᵀ]
+  - `coverage`: tr(PH) / mean diag H; ≫1 means plain SparseGPT already protects this subspace
+
+### CLI
+`--hall_direction {probe,random,contrast,contrast_random}`, `--contrast_rank` (64; 0 = all positive), `--contrast_nquads` (1024), `--contrast_control_weight` (1.0), `--contrast_quads_per_batch` (16), `--contrast_no_filter`, `--contrast_file`. `runner.py` passes these through and puts them in the run name (e.g. `hallprune-contrast-k64-n1024-a10.0-mean_diag-llama-3.1-8b`).
+
+### Verification (CPU, tiny random Llama: 2 layers, hidden 64)
+- Right-padded batched statements give the same last-token linear inputs as unpadded single forwards.
+- Every P is PSD with unit trace. All pruned linears are at 50% sparsity.
+- tr(δW P δWᵀ) drops monotonically with α. Example, layer 1 down_proj: 2.4e-3 at α=0, 9.0e-4 at α=10, 8.1e-5 at α=1000.
+- α=0 reproduces `prune_sparsegpt` exactly (max |ΔW| = 0).
+- `contrast_random`, β=0, and full rank all run. The old rank-1 probe and random paths still run.
+- Layer-0 `qkv_in` has no signal (every statement ends in "."), so it's pruned without a penalty, as before.
+- **Not run:** anything on the 8B model or a GPU. The eigendecomposition of a 14336×14336 matrix (down_proj) per layer is new compute; expect it to take minutes in total on an H100.
+
+### Next experiments
+1. Dense-model eval, and 2–3 more seeds of the rank-1 random control, to calibrate the noise.
+2. Rank sweep k ∈ {1, 8, 64, 256} at α ∈ {10, 100}, each with a `contrast_random` control at the same k.
+3. Ablations: β=0 (no object control) vs β=1; knowledge filter on vs off; number of quads.
+4. Build the evals: Bürger probe accuracy (to compare with TPLO), and generation-level hallucination rate plus attempt rate (SimpleQA/PopQA-style, split by entity from CounterFact).
