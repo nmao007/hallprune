@@ -3,6 +3,8 @@
     modal secret create huggingface HF_TOKEN=hf_...
     modal run runner.py::main                             # probe, alpha=1.0
     modal run runner.py::main --hall-alpha 10 --hall-direction random
+    modal run runner.py::main --hall-alpha 10 --hall-direction contrast --contrast-rank 64
+    modal run runner.py::main --hall-alpha 10 --hall-direction contrast_random --contrast-rank 64   # matched control
     modal run runner.py::main --prune-method sparsegpt    # baseline
     modal run --detach runner.py::main ...                # keep running if you close the terminal
 
@@ -29,7 +31,7 @@ image = (
     .pip_install("sentencepiece", "protobuf", "tiktoken", "pandas", "pyarrow", "huggingface_hub[hf_transfer]")
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "HF_HOME": "/cache/hf"})
     .add_local_dir("src", f"{REPO}/src", ignore=["**/.DS_Store", "**/__pycache__", "out/**", "llm_weights/**"])
-    .add_local_dir("data", f"{REPO}/data")
+    .add_local_dir("data", f"{REPO}/data", ignore=["truth/raw/**", "**/.DS_Store"])
     .add_local_dir("tasks", f"{REPO}/tasks", ignore=["**/__pycache__"])
 )
 
@@ -52,13 +54,19 @@ def prune(
     hall_alpha_scale: str = "mean_diag",
     hall_direction: str = "probe",
     hall_direction_seed: int = 0,
+    contrast_rank: int = 64,
+    contrast_nquads: int = 1024,
+    contrast_control_weight: float = 1.0,
     upload: bool = True,
 ):
     from huggingface_hub import HfApi
 
     if prune_method == "hallprune":
         run_name = f"hallprune-{hall_direction}-a{hall_alpha}-{hall_alpha_scale}-llama-3.1-8b"
-        if hall_direction == "random":
+        if hall_direction in ("contrast", "contrast_random"):
+            tag = f"k{contrast_rank}-n{contrast_nquads}" + ("" if contrast_control_weight == 1.0 else f"-b{contrast_control_weight}")
+            run_name = run_name.replace(f"-{hall_direction}-", f"-{hall_direction}-{tag}-")
+        if hall_direction in ("random", "contrast_random"):
             run_name = run_name.replace("-llama", f"-s{hall_direction_seed}-llama")
     else:
         # Distinct from the pre-audit *_pruned-llama-3.1-8b repos, so they aren't overwritten
@@ -77,6 +85,9 @@ def prune(
         "--hall_alpha_scale", hall_alpha_scale,
         "--hall_direction", hall_direction,
         "--hall_direction_seed", str(hall_direction_seed),
+        "--contrast_rank", str(contrast_rank),
+        "--contrast_nquads", str(contrast_nquads),
+        "--contrast_control_weight", str(contrast_control_weight),
         "--save", out_dir,
         "--save_model", out_dir,
     ]
@@ -170,6 +181,9 @@ def main(
     hall_alpha_scale: str = "mean_diag",
     hall_direction: str = "probe",
     hall_direction_seed: int = 0,
+    contrast_rank: int = 64,
+    contrast_nquads: int = 1024,
+    contrast_control_weight: float = 1.0,
     percdamp: float = 0.01,
     upload: bool = True,
 ):
@@ -180,6 +194,9 @@ def main(
         hall_alpha_scale=hall_alpha_scale,
         hall_direction=hall_direction,
         hall_direction_seed=hall_direction_seed,
+        contrast_rank=contrast_rank,
+        contrast_nquads=contrast_nquads,
+        contrast_control_weight=contrast_control_weight,
         upload=upload,
     ))
 
