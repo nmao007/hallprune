@@ -174,6 +174,42 @@ def evaluate_model(model_id: str, truthfulqa_only: bool = False) -> dict[str, by
     }
 
 
+# Dense model plus every pruned model on the hallprune-out volume that the probe eval compares
+PROBE_EVAL_MODELS = [
+    MODEL_ID,
+    "/out/sparsegpt-pd0.01-llama-3.1-8b",
+    "/out/wanda-pd0.01-llama-3.1-8b",
+    "/out/hallprune-probe-a10.0-mean_diag-llama-3.1-8b",
+    "/out/hallprune-random-a10.0-mean_diag-s0-llama-3.1-8b",
+    "/out/hallprune-contrast-k64-n1024-a10.0-mean_diag-llama-3.1-8b",
+    "/out/hallprune-contrast-k64-n1024-a100.0-mean_diag-llama-3.1-8b",
+    "/out/hallprune-contrast-k64-n1024-a640.0-mean_diag-llama-3.1-8b",
+]
+
+
+@app.function(
+    gpu="H100",
+    timeout=60 * 60,
+    secrets=[modal.Secret.from_name("huggingface")],
+    volumes={"/cache": hf_cache, "/out": out_vol},
+)
+def probe_eval_model(model_id: str) -> tuple[str, dict]:
+    """Truth-probe accuracy on the held-out Bürger true/false sets (see src/lib/probe_eval.py)."""
+    import sys
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.append(f"{REPO}/src")
+    from lib.probe_eval import run_probe_eval
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, device_map="auto").eval()
+    results = run_probe_eval(model, tokenizer, torch.device("cuda:0"))
+    results["model_id"] = model_id
+    return model_id, results
+
+
 @app.local_entrypoint()
 def main(
     prune_method: str = "hallprune",
@@ -210,3 +246,23 @@ def evaluate(model_id: str, truthfulqa_only: bool = False):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
     print(f"Saved {len(files)} files to {local_dir}/")
+
+
+@app.local_entrypoint()
+def probes(model_ids: str = ""):
+    """Probe accuracy for several models in parallel; writes results/<name>/probe_results/probe_accuracy.json.
+
+        modal run runner.py::probes                                  # PROBE_EVAL_MODELS
+        modal run runner.py::probes --model-ids /out/a,/out/b
+    """
+    import json
+
+    ids = [m for m in model_ids.split(",") if m] or PROBE_EVAL_MODELS
+    for model_id, results in probe_eval_model.map(ids):
+        name = model_id.rstrip("/").split("/")[-1]
+        dest = Path("results") / name / "probe_results" / "probe_accuracy.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(results, indent=1))
+        best = max(results["layers"], key=lambda l: results["layers"][l]["lr"]["lofo_mean"])
+        print(f"{name}: LR lofo layer 12 {results['layers']['12']['lr']['lofo_mean']:.4f}, "
+              f"best layer {best} {results['layers'][best]['lr']['lofo_mean']:.4f}")
