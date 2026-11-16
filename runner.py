@@ -286,3 +286,133 @@ def probes(model_ids: str = ""):
         best = max(results["layers"], key=lambda l: results["layers"][l]["lr"]["lofo_mean"])
         print(f"{name}: LR lofo layer 12 {results['layers']['12']['lr']['lofo_mean']:.4f}, "
               f"best layer {best} {results['layers'][best]['lr']['lofo_mean']:.4f}")
+
+
+# Phase 1 diagnostics (src/lib/truth_diagnostics.py): dense first, it is the reference for every test
+DIAG_MODELS = [
+    MODEL_ID,
+    "/out/sparsegpt-pd0.01-llama-3.1-8b",
+    "/out/wanda-pd0.01-llama-3.1-8b",
+]
+
+
+@app.function(
+    gpu="H100",
+    timeout=60 * 60,
+    secrets=[modal.Secret.from_name("huggingface")],
+    volumes={"/cache": hf_cache, "/out": out_vol},
+)
+def diag_extract(model_id: str) -> str:
+    """Residual-stream activations and True/False judgments on the Bürger sets, saved to /out/diag/."""
+    import sys
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.append(f"{REPO}/src")
+    from lib.truth_diagnostics import extract_diag, save_diag
+
+    name = model_id.rstrip("/").split("/")[-1]
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, device_map="auto").eval()
+    save_diag(extract_diag(model, tokenizer, torch.device("cuda:0")), f"/out/diag/{name}.npz")
+    out_vol.commit()
+    return name
+
+
+@app.function(cpu=16, memory=65536, timeout=4 * 60 * 60, volumes={"/out": out_vol})
+def diag_analyze(name: str, dense_name: str) -> tuple[str, dict]:
+    import sys
+
+    sys.path.append(f"{REPO}/src")
+    from lib.truth_diagnostics import analyze, load_diag
+
+    out_vol.reload()
+    return name, analyze(load_diag(f"/out/diag/{name}.npz"), load_diag(f"/out/diag/{dense_name}.npz"))
+
+
+@app.local_entrypoint()
+def diagnostics(model_ids: str = "", skip_extract: bool = False):
+    """Phase 1 diagnostics; writes results/<name>/diagnostics/phase1.json.
+
+        modal run runner.py::diagnostics                    # DIAG_MODELS
+        modal run runner.py::diagnostics --skip-extract     # re-analyze activations already on the volume
+    """
+    import json
+    import sys
+
+    sys.path.append("src")
+    from lib.truth_diagnostics import headline
+
+    ids = [m for m in model_ids.split(",") if m] or DIAG_MODELS
+    dense_name = MODEL_ID.split("/")[-1]
+    if not skip_extract:
+        names = list(diag_extract.map(ids))
+    else:
+        names = [m.rstrip("/").split("/")[-1] for m in ids]
+    for name, res in diag_analyze.starmap([(n, dense_name) for n in names]):
+        dest = Path("results") / name / "diagnostics" / "phase1.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(res, indent=1))
+        print(f"\n{name} (layer 12; second column is the dense model or a paired number):\n{headline(res)}")
+
+
+@app.function(
+    gpu="H100",
+    timeout=60 * 60,
+    secrets=[modal.Secret.from_name("huggingface")],
+    volumes={"/cache": hf_cache, "/out": out_vol},
+)
+def lens_extract(model_id: str, n_facts: int = 4000) -> tuple[str, bytes, bytes]:
+    """Logit-lens ranks of the true object for CounterFact recall prompts (src/lib/recall_lens.py)."""
+    import io
+    import sys
+
+    import numpy as np
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.append(f"{REPO}/src")
+    from lib.recall_lens import lens_ranks, load_recall_facts
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, device_map="auto").eval()
+    ranks, probs = lens_ranks(model, tokenizer, load_recall_facts(tokenizer, n_facts), torch.device("cuda:0"))
+    out = []
+    for a in (ranks, probs):
+        buf = io.BytesIO()
+        np.save(buf, a)
+        out.append(buf.getvalue())
+    return model_id.rstrip("/").split("/")[-1], out[0], out[1]
+
+
+@app.local_entrypoint()
+def lens(model_ids: str = "", n_facts: int = 4000):
+    """Recall filter + logit lens; writes results/<name>/diagnostics/recall_lens{_ranks.npy,.json}.
+
+        modal run runner.py::lens
+    """
+    import io
+    import json
+    import sys
+
+    import numpy as np
+
+    sys.path.append("src")
+    from lib.recall_lens import analyze, headline
+
+    ids = [m for m in model_ids.split(",") if m] or DIAG_MODELS
+    ranks = {}
+    for name, r, p in lens_extract.map(ids, kwargs={"n_facts": n_facts}):
+        ranks[name] = np.load(io.BytesIO(r))
+        d = Path("results") / name / "diagnostics"
+        d.mkdir(parents=True, exist_ok=True)
+        np.save(d / "recall_lens_ranks.npy", ranks[name])
+        np.save(d / "recall_lens_probs.npy", np.load(io.BytesIO(p)))
+    dense = MODEL_ID.split("/")[-1]
+    for name in ranks:
+        if name == dense:
+            continue
+        res = analyze(ranks[dense], ranks[name])
+        (Path("results") / name / "diagnostics" / "recall_lens.json").write_text(json.dumps(res, indent=1))
+        print(f"\n{name}:\n{headline(res)}")
